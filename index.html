@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistema di Votazione</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -170,6 +173,12 @@
             border-radius: 5px;
             cursor: pointer;
         }
+        .loading {
+            text-align: center;
+            margin: 40px 0;
+            font-size: 18px;
+            color: #7f8c8d;
+        }
         @media (max-width: 768px) {
             .container {
                 margin: 20px 10px;
@@ -188,8 +197,12 @@
 </head>
 <body>
     <div class="container">
+        <div id="loading-page" class="loading">
+            <p>Caricamento in corso...</p>
+        </div>
+        
         <!-- Login Page -->
-        <div id="login-page">
+        <div id="login-page" class="hidden">
             <h1>Sistema di Votazione</h1>
             <p>Inserisci il tuo codice di accesso per votare.</p>
             <div class="login-form">
@@ -278,38 +291,24 @@
         const TOTAL_PARTICIPANTS = 15;
         const VOTES_REQUIRED = 12;
         
-        // Generiamo codici di accesso univoci per i votanti
-        const generateRandomCode = () => {
-            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        // Configurazione Firebase - SOSTITUISCI CON I TUOI DATI DI CONFIGURAZIONE
+        const firebaseConfig = {
+             apiKey: "AIzaSyC71_YMrUyPsi4DN1zW4DHTtsI18zW1IwQ",
+            authDomain: "fdgfdgfdfddddddddd.firebaseapp.com",
+          databaseURL: "https://fdgfdgfdfddddddddd-default-rtdb.europe-west1.firebasedatabase.app",
+          projectId: "fdgfdgfdfddddddddd",
+          storageBucket: "fdgfdgfdfddddddddd.firebasestorage.app",
+          messagingSenderId: "938527443228",
+          appId: "1:938527443228:web:bfe23cba98240740f452d9",
+          measurementId: "G-356DQ3WYZW"
         };
         
-        // Inizializzazione del localStorage se necessario
-        if (!localStorage.getItem('votingSystemData')) {
-            const accessCodes = [];
-            for (let i = 0; i < TOTAL_PARTICIPANTS; i++) {
-                accessCodes.push(generateRandomCode());
-            }
-            
-            const initialData = {
-                accessCodes: accessCodes,
-                votes: {},
-                hasVoted: {}
-            };
-            
-            localStorage.setItem('votingSystemData', JSON.stringify(initialData));
-        }
-        
-        // Caricamento dei dati dal localStorage
-        const loadData = () => {
-            return JSON.parse(localStorage.getItem('votingSystemData'));
-        };
-        
-        // Salvataggio dei dati nel localStorage
-        const saveData = (data) => {
-            localStorage.setItem('votingSystemData', JSON.stringify(data));
-        };
+        // Inizializzazione Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
         
         // Elementi UI
+        const loadingPage = document.getElementById('loading-page');
         const loginPage = document.getElementById('login-page');
         const adminLoginPage = document.getElementById('admin-login-page');
         const votingPage = document.getElementById('voting-page');
@@ -338,9 +337,61 @@
         // Stato dell'applicazione
         let currentUser = null;
         let selectedOptions = [];
+        let appData = null;
+        
+        // Generiamo codici di accesso univoci per i votanti
+        const generateRandomCode = () => {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        };
+        
+        // Inizializzazione Firebase
+        const initializeDatabase = async () => {
+            try {
+                const snapshot = await database.ref('votingSystem').once('value');
+                const data = snapshot.val();
+                
+                if (!data) {
+                    // Prima inizializzazione
+                    const accessCodes = [];
+                    for (let i = 0; i < TOTAL_PARTICIPANTS; i++) {
+                        accessCodes.push(generateRandomCode());
+                    }
+                    
+                    const initialData = {
+                        accessCodes: accessCodes,
+                        votes: {},
+                        hasVoted: {}
+                    };
+                    
+                    await database.ref('votingSystem').set(initialData);
+                    appData = initialData;
+                } else {
+                    appData = data;
+                }
+                
+                // Mostra la pagina di login una volta caricati i dati
+                showPage(loginPage);
+                
+                // Configura l'ascolto per gli aggiornamenti
+                database.ref('votingSystem').on('value', (snapshot) => {
+                    appData = snapshot.val();
+                    
+                    // Aggiorna UI se necessario
+                    if (document.getElementById('admin-panel').classList.contains('hidden') === false) {
+                        updateVoterStatus();
+                        displayAccessCodes();
+                        displayResults();
+                    }
+                });
+            } catch (error) {
+                console.error("Errore durante l'inizializzazione:", error);
+                alert("Si è verificato un errore durante la connessione al database. Ricarica la pagina per riprovare.");
+            }
+        };
         
         // Mostra la pagina appropriata
         const showPage = (page) => {
+            loadingPage.classList.add('hidden');
             loginPage.classList.add('hidden');
             adminLoginPage.classList.add('hidden');
             votingPage.classList.add('hidden');
@@ -350,12 +401,11 @@
         };
         
         // Login utente
-        loginBtn.addEventListener('click', () => {
+        loginBtn.addEventListener('click', async () => {
             const accessCode = accessCodeInput.value.trim().toUpperCase();
-            const data = loadData();
             
-            if (data.accessCodes.includes(accessCode)) {
-                if (data.hasVoted[accessCode]) {
+            if (appData.accessCodes.includes(accessCode)) {
+                if (appData.hasVoted && appData.hasVoted[accessCode]) {
                     loginError.textContent = 'Hai già votato con questo codice.';
                     loginError.classList.remove('hidden');
                 } else {
@@ -452,39 +502,51 @@
         };
         
         // Submit vote
-        submitVoteBtn.addEventListener('click', () => {
+        submitVoteBtn.addEventListener('click', async () => {
             if (selectedOptions.length !== VOTES_REQUIRED) {
                 voteError.textContent = `Devi selezionare esattamente ${VOTES_REQUIRED} nomi.`;
                 voteError.classList.remove('hidden');
                 return;
             }
             
-            const data = loadData();
-            
-            // Registro il voto
-            data.votes[currentUser] = selectedOptions;
-            data.hasVoted[currentUser] = true;
-            
-            saveData(data);
-            
-            // Mostro il messaggio di conferma
-            voteSuccess.textContent = 'Voto registrato con successo. Grazie per aver votato!';
-            voteSuccess.classList.remove('hidden');
-            voteError.classList.add('hidden');
-            submitVoteBtn.disabled = true;
-            
-            // Disabilito la selezione
-            const options = document.querySelectorAll('.vote-option');
-            options.forEach(option => {
-                option.style.pointerEvents = 'none';
-                option.style.opacity = '0.7';
-            });
-            
-            // Reindirizzo alla pagina di login dopo 3 secondi
-            setTimeout(() => {
-                currentUser = null;
-                showPage(loginPage);
-            }, 3000);
+            try {
+                // Verifico ancora che l'utente non abbia già votato
+                const snapshot = await database.ref(`votingSystem/hasVoted/${currentUser}`).once('value');
+                const hasAlreadyVoted = snapshot.val();
+                
+                if (hasAlreadyVoted) {
+                    voteError.textContent = 'Sembra che tu abbia già votato con questo codice.';
+                    voteError.classList.remove('hidden');
+                    return;
+                }
+                
+                // Registro il voto
+                await database.ref(`votingSystem/votes/${currentUser}`).set(selectedOptions);
+                await database.ref(`votingSystem/hasVoted/${currentUser}`).set(true);
+                
+                // Mostro il messaggio di conferma
+                voteSuccess.textContent = 'Voto registrato con successo. Grazie per aver votato!';
+                voteSuccess.classList.remove('hidden');
+                voteError.classList.add('hidden');
+                submitVoteBtn.disabled = true;
+                
+                // Disabilito la selezione
+                const options = document.querySelectorAll('.vote-option');
+                options.forEach(option => {
+                    option.style.pointerEvents = 'none';
+                    option.style.opacity = '0.7';
+                });
+                
+                // Reindirizzo alla pagina di login dopo 3 secondi
+                setTimeout(() => {
+                    currentUser = null;
+                    showPage(loginPage);
+                }, 3000);
+            } catch (error) {
+                console.error("Errore durante il salvataggio del voto:", error);
+                voteError.textContent = "Si è verificato un errore durante il salvataggio del voto. Riprova.";
+                voteError.classList.remove('hidden');
+            }
         });
         
         // Tab navigation in admin panel
@@ -511,24 +573,22 @@
             updateVoterStatus();
             displayAccessCodes();
             displayResults();
-            
-            // Auto-refresh voter status every 10 seconds
-            setInterval(updateVoterStatus, 10000);
         };
         
         // Update voter status
         const updateVoterStatus = () => {
-            const data = loadData();
             voterList.innerHTML = '';
             
-            data.accessCodes.forEach((code, index) => {
+            appData.accessCodes.forEach((code, index) => {
+                const hasVoted = appData.hasVoted && appData.hasVoted[code] ? true : false;
+                
                 const voter = document.createElement('div');
                 voter.classList.add('voter-item');
-                voter.classList.add(data.hasVoted[code] ? 'voted' : 'not-voted');
+                voter.classList.add(hasVoted ? 'voted' : 'not-voted');
                 
                 voter.innerHTML = `
                     <span>Votante ${index + 1}: ${code}</span>
-                    <span>${data.hasVoted[code] ? '✅ Ha votato' : '❌ Non ha ancora votato'}</span>
+                    <span>${hasVoted ? '✅ Ha votato' : '❌ Non ha ancora votato'}</span>
                 `;
                 
                 voterList.appendChild(voter);
@@ -537,10 +597,9 @@
         
         // Display access codes
         const displayAccessCodes = () => {
-            const data = loadData();
             accessCodesList.innerHTML = '';
             
-            data.accessCodes.forEach((code, index) => {
+            appData.accessCodes.forEach((code, index) => {
                 const codeItem = document.createElement('div');
                 codeItem.classList.add('voter-item');
                 codeItem.innerHTML = `<span>Votante ${index + 1}:</span> <strong>${code}</strong>`;
@@ -550,8 +609,8 @@
         
         // Display results
         const displayResults = () => {
-            const data = loadData();
-            const totalVotes = Object.keys(data.votes).length;
+            const votes = appData.votes || {};
+            const totalVotes = Object.keys(votes).length;
             
             // Check if all participants have voted
             if (totalVotes < TOTAL_PARTICIPANTS) {
@@ -572,8 +631,8 @@
             const results = {};
             PARTICIPANTS.forEach(name => results[name] = 0);
             
-            Object.values(data.votes).forEach(votes => {
-                votes.forEach(name => {
+            Object.values(votes).forEach(selectedNames => {
+                selectedNames.forEach(name => {
                     results[name]++;
                 });
             });
@@ -617,8 +676,8 @@
             }
         });
         
-        // Inizializzazione pagina
-        showPage(loginPage);
+        // Inizializzazione app
+        initializeDatabase();
     </script>
 </body>
 </html>
